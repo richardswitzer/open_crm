@@ -1,0 +1,154 @@
+
+CRM - Change Document appointment date using XIF
+Skip to end of metadata
+Created by Former Member, last modified on Oct 28, 2014 Go to start of metadata
+Applies to:
+SAP CRM (tested in version 7.0 Ehp2)
+
+Summary
+Alternative version of the source provided by Bruno Garcia (CRM - change document appointment date):
+
+"Simple report that may be used to change an appointment date of a CRM document. The change may be at header level, or at item level."
+
+My goal using the XIF is provide an alternative way to accomplish the same, the major benefit are:
+
+Less lines of code, easier to maintain
+Easy to enhance the code with other fields (the imput parameter type CRMXIF_BUSTRANS provides almost every field you may need to update the OneOrder object)
+Possibility of porting the mapping into a SXDA-LSMW approach with almost no effort and no custom code (smile)
+Keep in mind this approach is for the highest level of application, don't not use it in API level (e.g BADI ORDER_SAVE, BTE. etc.) also don't mix it with the WebUI framwework (e.g Components, BOL, GENIL)
+
+Author(s):  
+Company:     Accenutre
+Created on:    31 July 2014
+Author(s) Bio : Luis Perez is an CRM/ABAP consultant
+
+ 
+
+/*
+*----------------------------------------------
+* DATA DECLARATION
+*----------------------------------------------
+INCLUDE crm_direct.
+ 
+TYPES: BEGIN OF ts_orderadm_h,
+         guid         TYPE crmd_orderadm_h-guid,
+         object_id    TYPE crmd_orderadm_h-object_id,
+         process_type TYPE crmd_orderadm_h-process_type,
+         object_type  TYPE crmd_orderadm_h-object_type,
+       END OF ts_orderadm_h,
+       BEGIN OF ts_orderadm_i,
+         object_type  TYPE crmd_orderadm_i-object_type,
+         number_int   TYPE crmd_orderadm_i-number_int,
+       END OF ts_orderadm_i.
+ 
+ 
+DATA: lt_data   TYPE crmxif_bustrans_t,
+      lt_return TYPE  bapiretm.
+ 
+DATA lv_timestamp_from    TYPE timestamp.
+DATA lv_timestamp_to      TYPE timestamp.
+ 
+DATA: ls_orderadm_h TYPE ts_orderadm_h,
+      ls_orderadm_i TYPE ts_orderadm_i.
+ 
+FIELD-SYMBOLS: <ls_data>  LIKE LINE OF lt_data,
+               <ls_dates> LIKE LINE OF <ls_data>-dates-data,
+               <ls_item>  LIKE LINE OF <ls_data>-item.
+ 
+*----------------------------------------------
+* SELECTION SCREEN
+*----------------------------------------------
+SELECTION-SCREEN: BEGIN OF BLOCK b1 WITH FRAME TITLE text-b01.
+PARAMETERS p_id       TYPE crmt_object_id. "Document ID
+PARAMETERS p_kind     TYPE crmt_object_kind. "A-Header, B-Item
+PARAMETERS p_item     TYPE crmd_orderadm_i-number_int. "Item number. Example: 10
+SELECTION-SCREEN: END OF BLOCK b1.
+ 
+ 
+SELECTION-SCREEN: BEGIN OF BLOCK b2 WITH FRAME TITLE text-b02.
+PARAMETERS p_type     TYPE crmt_appointment_wrk-appt_type. "Appointment Type
+PARAMETERS p_datef    TYPE sy-datlo. "Date from
+PARAMETERS p_timef    TYPE sy-timlo. "Time from
+PARAMETERS p_datet    TYPE sy-datlo. "Date to
+PARAMETERS p_timet    TYPE sy-timlo. "Time to
+SELECTION-SCREEN: END OF BLOCK b2.
+ 
+ 
+*----------------------------------------------
+* READY, SET... GO!
+*----------------------------------------------
+START-OF-SELECTION.
+*- Check Fields
+  IF p_id IS INITIAL OR p_kind IS INITIAL OR p_type IS INITIAL OR p_datef IS INITIAL OR p_timef IS INITIAL.
+    MESSAGE 'Please fill all input fields, except date_to and time_to' TYPE 'I'.
+    EXIT.
+  ENDIF.
+  IF p_kind = 'B' AND p_item IS INITIAL.
+    MESSAGE 'Please fill item number to update' TYPE 'I'.
+  ENDIF.
+ 
+ 
+* Get header logical key
+  SELECT SINGLE guid object_id process_type object_type FROM crmd_orderadm_h INTO ls_orderadm_h WHERE object_id = p_id.
+  IF sy-subrc NE 0.
+    MESSAGE 'Document not found' TYPE 'I'.
+    EXIT.
+  ENDIF.
+* Get item logical key
+  IF p_kind = gc_object_kind-orderadm_i.
+    SELECT SINGLE object_type number_int FROM crmd_orderadm_i INTO ls_orderadm_i 
+      WHERE header = ls_orderadm_h-guid  AND number_int = p_item.
+    IF sy-subrc NE 0.
+      MESSAGE 'Item not found' TYPE 'I'.
+      EXIT.
+    ENDIF.
+  ENDIF.
+ 
+ 
+*- Calculate timestamp for new date/time
+  CONVERT DATE p_datef TIME p_timef INTO TIME STAMP lv_timestamp_from TIME ZONE sy-zonlo.
+  CONVERT DATE p_datet TIME p_timet INTO TIME STAMP lv_timestamp_to TIME ZONE sy-zonlo.
+ 
+  APPEND INITIAL LINE TO lt_data ASSIGNING <ls_data>.
+  <ls_data>-object_task = 'U'.
+  <ls_data>-object_id  = ls_orderadm_h-object_id.
+  <ls_data>-process_type = ls_orderadm_h-process_type.
+  <ls_data>-object_type = ls_orderadm_h-object_type.
+*  To understand why I marked this, please refer to the following blog:
+*  http://scn.sap.com/community/crm/master-data-and-middleware/blog/2014/06/17/xif-dont-update-my-crmdorderadmh-please 
+  <ls_data>-input_fields-object_guid = abap_true.
+ 
+ 
+* Appointment
+  IF p_kind = gc_object_kind-orderadm_h.
+    <ls_data>-dates-datax = abap_true.
+    APPEND INITIAL LINE TO <ls_data>-dates-data ASSIGNING <ls_dates>.
+  ELSEIF p_kind = gc_object_kind-orderadm_i.
+    APPEND INITIAL LINE TO <ls_data>-item  ASSIGNING <ls_item>.
+    <ls_item>-object_task = 'U'.
+    <ls_item>-item_number = ls_orderadm_i-number_int.
+    <ls_item>-object_type = ls_orderadm_i-object_type.
+*    To understand why I marked this, please refer to the following blog:
+*    http://scn.sap.com/community/crm/master-data-and-middleware/blog/2014/06/17/xif-dont-update-my-crmdorderadmh-please 
+    <ls_item>-input_fields-item_guid = abap_true.
+    <ls_item>-dates-datax = abap_true.
+    APPEND INITIAL LINE TO <ls_item>-dates-data ASSIGNING <ls_dates>.
+  ENDIF.
+ 
+ 
+  <ls_dates>-object_task = 'U'.
+  <ls_dates>-appt_type = p_type  .
+  MOVE lv_timestamp_from TO <ls_dates>-timestamp_from.
+  MOVE lv_timestamp_to TO <ls_dates>-timestamp_to.
+  <ls_dates>-input_fields-appt_type = abap_true.
+  <ls_dates>-input_fields-timestamp_from = abap_true.
+  <ls_dates>-input_fields-timestamp_to = abap_true.
+ 
+  CALL FUNCTION 'CRMXIF_ORDER_SAVE'
+    EXPORTING
+      data   = lt_data
+    IMPORTING
+      return = lt_return. "Output of errors
+ 
+  CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'.
+ */
